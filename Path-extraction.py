@@ -1,6 +1,7 @@
 import string
 import sys
 from numpy import array, zeros, multiply, dot, ceil, where, mod
+import numpy as np
 import argparse
 import datetime
 import time
@@ -128,7 +129,7 @@ def optimize_flow_as_qp(graph):
             flow_value = int(flow_vars[source, target].X)  # 取整数部分
             if flow_value != 0:
                 flow_property[e] = flow_value
-                print(f"Flow on edge {source}->{target}: {flow_property[e]}")
+                # print(f"Flow on edge {source}->{target}: {flow_property[e]}")
 
         # 将流量属性绑定到图中
         graph.edge_properties["flow"] = flow_property
@@ -197,19 +198,109 @@ def print_vertex_properties(graph):
         print(f"顶点 {v_id}: info = {v_info}, coverage = {v_coverage}")
 
 
-# 使用dijkstra找权值的最小的路径
- def dijkstra(graph):
+# Find the "shortest" Path by dijkstra 使用dijkstra找权值的最小的路径
+def dijkstra(graph):
     flow_property = graph.edge_properties["flow"]
     # 最小堆
-    heap = [] 
+    heap = []
+    path = {}
     # dist[i] 记录源点到i点的距离最小值
-    dist = [sys.maxsize] * graph.num_vertices()
+    # 初始化为无穷大
+    N = graph.num_vertices() # reprense the number of vertices
+    dist = [np.inf] * N
+    visited = [False] * N
+    prev = [-1] * N
+    sourceId = 0
+    sinkId = N - 1
 
-    for v in graph.vertices():
-        heapq.heappush(heap)
+    dist[sourceId] = 0
+    heap = [(0,sourceId)] # first key is distance and the second is ID of vertex
+
+    while heap:
+        curDist, curId = heapq.heappop(heap)
+        if visited[curId]:
+            continue
+        visited[curId] = True
+
+        curVertex = graph.vertex(curId)
+        for e in curVertex.out_edges():
+            v = int(e.target())
+
+            weight = flow_property[e]
+            if curDist + weight < dist[v]:
+                dist[v] = curDist + weight
+                heapq.heappush(heap,(dist[v], v))
+                prev[v] = curId # record ID of previous node
+
+    # build the shortest Path
+    def build_path(prev, tragetId, graph):
+        # Backtrace from the end to find the Path
+        path = []
+        flow_property = graph.edge_properties["flow"]
+        coverage_property = graph.vertex_properties["coverage"]
+
+        while tragetId != -1:
+            path.append(int(tragetId))
+            prevId = prev[tragetId]
+
+            if prevId == -1:
+                break
+
+            prevNode = graph.vertex(prevId)
+            tragetNode = graph.vertex(tragetId)
+            curEdge = graph.edge(prevNode,tragetNode,all_edges=True)
+            
+            # update current edge's flow
+            if curEdge is not None:
+                # multiple edges
+                for edge in curEdge:
+                    coverage = coverage_property[prevNode]
+                    new_flow = flow_property[edge] + coverage*10
+                    flow_property[edge] = new_flow
+                        
+            tragetId = prevId
+        path.reverse()
+
+        return path
+    
+    if dist[sinkId] == np.inf:
+        print(f'No path leads to the endpoint')
+    else:
+        path = build_path(prev, sinkId, graph)
+        print(f'curPath value is {dist[sinkId]}')
+
+    return path
 
 
+# 调用函数导出流量信息到文件
+def export_flow_info(graph, filename="flow_info.txt"):
+    # 获取流量属性
+    flow_property = graph.edge_properties["flow"]
 
+    # 打开文件准备写入
+    with open(filename, "w") as file:
+        # 遍历所有边，获取流量信息并写入文件
+        for e in graph.edges():
+            source = int(e.source())
+            target = int(e.target())
+            flow = flow_property[e]
+            # 格式化字符串：点u -> 点v + 流量信息
+            line = f"{source} -> {target} with flow {flow}\n"
+            file.write(line)
+
+    print(f"Flow information has been exported to {filename}.")
+
+def export_path_info(path, num, filename="Path_info.txt"):
+    with open(filename, "a") as file:  # 使用 "a" 模式以追加的方式写入文件
+        # 使用f-string格式化路径编号，确保num变量被正确解析
+        line = f"path{num}: \n"
+        # 将节点ID转换为字符串，并用逗号连接
+        line += ", ".join(str(nodeId) for nodeId in path)
+        line += "\n"  # 添加换行符以分隔不同的路径
+        file.write(line)  # 写入整个路径信息
+
+    print(f"Path information has been exported to {filename}.")
+    
 
 
 file_path = '6-graph.fasta'
@@ -219,6 +310,14 @@ update_coverage(graph, coverage_file_path)
 # print_vertex_properties(graph)
 # optimize_flow(graph)
 optimize_flow_as_qp(graph)
+
+
+for i in range(6):
+    path = dijkstra(graph)
+    export_flow_info(graph)
+    export_path_info(path,i)
+  
+
 
 
 
