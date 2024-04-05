@@ -17,6 +17,7 @@ from graph_tool.all import Graph
 from graph_tool.topology import is_DAG, all_circuits, topological_sort, shortest_distance, shortest_path
 import heapq
 
+
 class Node:
     def __init__(self, nodeId, info, coverage=0):
         self.nodeId = nodeId
@@ -255,7 +256,7 @@ def dijkstra(graph):
                 # multiple edges
                 for edge in curEdge:
                     coverage = coverage_property[prevNode]
-                    new_flow = flow_property[edge] + coverage*10
+                    new_flow = flow_property[edge] + coverage * math.log10(coverage)
                     flow_property[edge] = new_flow
                         
             tragetId = prevId
@@ -301,6 +302,37 @@ def export_path_info(path, num, filename="Path_info.txt"):
 
     print(f"Path information has been exported to {filename}.")
     
+def export_pathExtraction_polio_fasta(graph, path, num, filename="validation-set.fasta"):
+
+    if "info" not in graph.vertex_properties:
+        print(f"The 'info' property does not exist on graph's vertices.")
+
+    info_property = graph.vertex_properties["info"]
+
+    with open(filename, "a") as file:
+        line = f">seq_{num+1}\n"
+        infos = [info_property[graph.vertex(nodeId)] for nodeId in path]
+        line += "".join(infos)
+        line += "\n"
+        file.write(line)
+    print(f"Path information with 'info' has been exported to {filename}.")
+
+def export_pathExtraction_polio_txt(graph, path, num, filename="validation-set.txt"):
+
+    if "info" not in graph.vertex_properties:
+        print(f"The 'info' property does not exist on graph's vertices.")
+
+    info_property = graph.vertex_properties["info"]
+
+    with open(filename, "a") as file:
+        line = f">seq_{num+1}\n"
+        infos = [info_property[graph.vertex(nodeId)] for nodeId in path]
+        line += "".join(infos)
+        line += "\n"
+        file.write(line)
+    print(f"Path information with 'info' has been exported to {filename}.")
+
+
 
 
 file_path = '6-graph.fasta'
@@ -312,10 +344,23 @@ update_coverage(graph, coverage_file_path)
 optimize_flow_as_qp(graph)
 
 
+#clean file content
+# 打开文件并截断其内容
+with open("validation-set.txt", "w") as file:
+    file.truncate(0)
+
+with open("validation-set.fasta", "w") as file:
+    file.truncate(0)
+
+with open("Path_info.txt", "w") as file:
+    file.truncate(0)
+
 for i in range(6):
     path = dijkstra(graph)
     export_flow_info(graph)
     export_path_info(path,i)
+    export_pathExtraction_polio_fasta(graph,path,i)
+    export_pathExtraction_polio_txt(graph,path,i)
   
 
 
