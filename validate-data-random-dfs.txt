@@ -1,0 +1,10 @@
+ID: seq_2, Best Ref: seq_3, Normalized Score: 0.6441018766756033
+ID: seq_3, Best Ref: seq_3, Normalized Score: 0.6442359249329759
+ID: seq_4, Best Ref: seq_3, Normalized Score: 0.6442359249329759
+ID: seq_5, Best Ref: seq_3, Normalized Score: 0.6441018766756033
+ID: seq_6, Best Ref: seq_3, Normalized Score: 0.6439678284182305
+ID: seq_7, Best Ref: seq_3, Normalized Score: 0.6441018766756033
+ID: seq_8, Best Ref: seq_3, Normalized Score: 0.6439678284182305
+ID: seq_9, Best Ref: seq_3, Normalized Score: 0.6441018766756033
+ID: seq_10, Best Ref: seq_3, Normalized Score: 0.6442359249329759
+ID: seq_11, Best Ref: seq_3, Normalized Score: 0.6441018766756033
