@@ -1,0 +1,6 @@
+seq_1 最佳匹配为 seq_5 Ident = 95.89
+seq_2 最佳匹配为 seq_6 Ident = 98.18
+seq_3 最佳匹配为 seq_3 Ident = 94.64
+seq_4 最佳匹配为 seq_4 Ident = 95.94
+seq_5 最佳匹配为 seq_6 Ident = 95.23
+seq_6 最佳匹配为 seq_6 Ident = 95.40
