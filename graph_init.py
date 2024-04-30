@@ -23,6 +23,39 @@ import validate_data
 from gurobipy import Model, GRB, quicksum
 
 
+def edge_weight_normalization(graph):
+    # g是你的图对象，且g已经有了一个权重属性
+    weight = graph.ep.weight
+
+    # 获取所有权重的列表
+    all_weights = [weight[e] for e in graph.edges()]
+
+    # 计算最大值和最小值
+    max_weight = max(all_weights)
+    min_weight = min(all_weights)
+
+    # 归一化权重，并设置回图的边属性
+    for e in graph.edges():
+        normalized_weight = (weight[e] - min_weight) / (max_weight - min_weight) if max_weight != min_weight else 0
+        weight[e] = normalized_weight
+
+
+
+# 构造路径i->u->j
+def enumerate_paths(graph):
+    # Generates paths that consist of incoming edges to u combined with outgoing edges from u
+    paths = {}
+    for u in graph.vertices():
+        in_edges = list(u.in_edges())
+        out_edges = list(u.out_edges())
+        for e_in in in_edges:
+            for e_out in out_edges:
+                # Create a path identified by the tuple (source of in_edge, u, target of out_edge)
+                path = (int(e_in.source()), int(u), int(e_out.target()))
+                paths[path] = (e_in, e_out)
+    return paths
+
+
 
 # 解析FASTA文件并构建图
 def build_graph_from_fasta(file_path):
@@ -302,7 +335,7 @@ def edge_weight_multiprocess(graph, fasta_data):
         weight_property[edge] = weight
 
 
-def export_edge_weigth(graph, filename="edgeWeight-graph.txt"):
+def export_edge_weigth(graph, id_to_vertex, filename="edgeWeight-graph.txt"):
     if "weight" not in graph.edge_properties:
         print(f"The 'info' property does not exist on graph's edges.")
 
@@ -318,10 +351,28 @@ def export_edge_weigth(graph, filename="edgeWeight-graph.txt"):
 
     print(f"Edge's Weight information has been exported to {filename}.")
 
+def export_edge_weigth(graph, vertex_to_id, filename="edgeWeight-graph.txt"):
+    if "weight" not in graph.edge_properties:
+        print(f"The 'info' property does not exist on graph's edges.")
+
+    wight_property = graph.edge_properties["weight"]
+    with open(filename, "w") as file:  # 使用 "a" 模式以追加的方式写入文件
+        for e in graph.edges():
+            curWeight = wight_property[e]
+            source = e.source()
+            target = e.target()
+            sourceID= vertex_to_id[source]
+            targetID = vertex_to_id[target]
+            # 使用f-string格式化路径编号，确保num变量被正确解析
+            line = f"edge {sourceID} -> {targetID} : {curWeight}\n"
+            file.write(line)  # 写入整个路径信息
+
+    print(f"Edge's Weight information has been exported to {filename}.")
+
 
 def read_edgeWeight(graph, filepath):
     if "weight" not in graph.edge_properties:
-        weight_property = graph.new_edge_property("int")
+        weight_property = graph.new_edge_property("double")
     else:
         weight_property = graph.edge_properties['weight']
 
@@ -333,6 +384,85 @@ def read_edgeWeight(graph, filepath):
             targetID = parts[3]
             weight = parts[-1]
             edge = graph.edge(graph.vertex(sourceID), graph.vertex(targetID))
+            weight_property[edge] = weight
+
+    graph.edge_properties["weight"] = weight_property 
+
+def build_graph_from_fasta_new(file_path):
+    graph = Graph(directed=True)
+    info = graph.new_vertex_property("string")  # Vertex property for node information
+    id_to_vertex = {}  # Maps node IDs to vertex objects
+    vertex_to_id = {}
+
+    with open(file_path, 'r') as file:
+        for line in file:
+            parts = line.strip().split()
+            if len(parts) < 2:
+                continue  # Ignore malformed lines
+
+            node_id = int(parts[0])
+            node_info = parts[1]
+            children_ids = map(int, parts[2:])  # Extract child node IDs
+
+            # Ensure the vertex exists for the node_id
+            if node_id not in id_to_vertex:
+                v = graph.add_vertex()  # Add new vertex
+                id_to_vertex[node_id] = v  # Map node_id to vertex descriptor
+                vertex_to_id[v] = node_id
+            else:
+                v = id_to_vertex[node_id]
+
+            # Set the vertex property for information
+            info[v] = node_info
+
+            # Iterate over children IDs and add edges
+            for child_id in children_ids:
+                if child_id not in id_to_vertex:
+                    child_v = graph.add_vertex()  # Add new vertex for the child
+                    id_to_vertex[child_id] = child_v
+                    vertex_to_id[child_v] = child_id
+                else:
+                    child_v = id_to_vertex[child_id]
+                graph.add_edge(v, child_v)  # Add edge from current vertex to child
+
+    graph.vertex_properties["info"] = info  # Attach property map to graph
+
+    return graph,id_to_vertex,vertex_to_id
+
+
+def update_coverage_new(graph, id_to_vertex,file_path):
+    coverage_property = graph.new_vertex_property("int")  # 避免与局部变量冲突
+
+    with open(file_path, 'r') as file:
+        for line in file:
+            parts = line.strip().split(' : ')
+            node_Id = int(parts[0])
+            cov_value = int(parts[1])  # 使用不同的变量名来存储覆盖率值
+
+            if node_Id in id_to_vertex:  # 使用映射来查找顶点
+                coverage_property[id_to_vertex[node_Id]] = cov_value
+            else:
+                print(f"Warning: Node {node_Id} not found in the graph.")
+    
+    graph.vertex_properties["coverage"] = coverage_property  # 将属性添加到图中
+
+
+def read_edgeWeight_new(graph, id_to_vertex, filepath):
+    if "weight" not in graph.edge_properties:
+        weight_property = graph.new_edge_property("double")
+    else:
+        weight_property = graph.edge_properties['weight']
+
+
+    with open(filepath, 'r') as file:
+        for line in file:
+            parts = line.strip().split()
+            sourceID = int(parts[1])
+            targetID = int(parts[3])
+            weight = parts[-1]
+            source = id_to_vertex[sourceID]
+            target = id_to_vertex[targetID]
+            edge = graph.edge(source, target)
             weight_property[edge] = weight
 
     graph.edge_properties["weight"] = weight_property 

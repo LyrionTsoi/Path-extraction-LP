@@ -1,31 +1,131 @@
-import string
-import sys
+import random
 from numpy import array, zeros, multiply, dot, ceil, where, mod
 import numpy as np
-import argparse
-import datetime
-import time
-import math
-import subprocess
 import copy
-from collections import OrderedDict
 # from gurobipy import *
 from gurobipy import Model, GRB, LinExpr
 import pulp
-# from graph_functions import read_gfa, get_seq, is_cycle, rev_comp
 from graph_tool.all import Graph
 from graph_tool.topology import is_DAG, all_circuits, topological_sort, shortest_distance, shortest_path
 import heapq
-
-
-class Node:
-    def __init__(self, nodeId, info, coverage=0):
-        self.nodeId = nodeId
-        self.info = info
-        self.children = []
-        self.coverage = coverage
+import validate_data
+from gurobipy import Model, GRB, quicksum, abs_, max_
+import graph_init
+import test
 
 from gurobipy import Model, GRB, quicksum
+
+def optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance, conservation_slack_tolerance):
+    m = Model("network_flow")
+
+    # Constants
+    M = 10000  # Large constant for big-M constraints
+
+    # Variables
+    x = {}
+    f = {}
+    c = {}
+    abs_diff = {}
+    diff_pos = {}
+    diff_neg = {}
+    flow_slack = {}  # Slack variables for flow discrepancies
+    conservation_slack = {}  # Slack variables for flow conservation
+
+    sourceID = 0
+    sinkID = 452
+
+    # Populate variables based on incoming and outgoing edges for each node u
+    for u in graph.vertices():
+        u_id = vertex_to_id[u]
+        if u_id == sourceID or u_id == sinkID:
+            continue
+
+        x[u_id] = {}
+        f[u_id] = {}
+        c[u_id] = {}
+        abs_diff[u_id] = {}
+        diff_pos[u_id] = {}
+        diff_neg[u_id] = {}
+        flow_slack[u_id] = {}
+        conservation_slack[u_id] = m.addVar(vtype=GRB.CONTINUOUS, lb=0, ub=conservation_slack_tolerance,
+                                          name=f"conservation_slack_{u_id}")
+        for e_in in u.in_edges():
+            i_id = vertex_to_id[e_in.source()]
+            for e_out in u.out_edges():
+                j_id = vertex_to_id[e_out.target()]
+                path = (i_id, u_id, j_id)
+                x[u_id][i_id, j_id] = m.addVar(vtype=GRB.BINARY, name=f"x_{i_id}_{u_id}_{j_id}")
+                f[u_id][i_id, j_id] = m.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"f_{i_id}_{u_id}_{j_id}")
+                c[u_id][i_id, j_id] = min(graph.ep['weight'][e_in], graph.ep['weight'][e_out])
+                abs_diff[u_id][i_id, j_id] = m.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"abs_diff_{i_id}_{u_id}_{j_id}")
+                diff_pos[u_id][i_id, j_id] = m.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"diff_pos_{i_id}_{u_id}_{j_id}")
+                diff_neg[u_id][i_id, j_id] = m.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"diff_neg_{i_id}_{u_id}_{j_id}")
+                flow_slack[u_id][i_id, j_id] = m.addVar(vtype=GRB.CONTINUOUS, lb=0, ub=flow_slack_tolerance,
+                                               name=f"flow_slack_{i_id}_{u_id}_{j_id}")
+
+    # Objective Function
+    m.setObjective(
+        quicksum(x[u_id][i_id, j_id] for u_id in x for i_id, j_id in x[u_id]) +
+        quicksum(abs_diff[u_id][i_id, j_id] for u_id in abs_diff for i_id, j_id in abs_diff[u_id]),
+        GRB.MINIMIZE
+    )
+
+    # Constraints to define absolute differences and include slack
+    for u_id in abs_diff:
+        for i_id, j_id in abs_diff[u_id]:
+            m.addConstr(abs_diff[u_id][i_id, j_id] == diff_pos[u_id][i_id, j_id] + diff_neg[u_id][i_id, j_id])
+            m.addConstr(f[u_id][i_id, j_id] - c[u_id][i_id, j_id] == diff_pos[u_id][i_id, j_id] - diff_neg[u_id][i_id, j_id])
+
+    # At least one path through each node u
+    for u_id in x:
+        m.addConstr(quicksum(x[u_id][i, j] for i, j in x[u_id]) >= 1)
+
+    # Flow conservation at each node u with slack
+    for u in graph.vertices():
+        u_id = vertex_to_id[u]
+        if u_id == sourceID or u_id == sinkID:
+            continue
+        inflow = quicksum(f[u_id][i_id, u_id] for i_id in vertex_to_id if (i_id, u_id) in f[u_id])
+        outflow = quicksum(f[u_id][u_id, j_id] for j_id in vertex_to_id if (u_id, j_id) in f[u_id])
+        m.addConstr(inflow - outflow <= conservation_slack[u_id])
+        m.addConstr(outflow - inflow <= conservation_slack[u_id])
+
+    # Big-M constraints to link x and f
+    for u_id in f:
+        for i_id, j_id in f[u_id]:
+            m.addConstr(f[u_id][i_id, j_id] <= M * x[u_id][i_id, j_id])
+            m.addConstr(f[u_id][i_id, j_id] * M >= x[u_id][i_id, j_id])
+
+    # Solve the model
+    m.optimize()
+
+    # Output results
+    x_opt = {}
+    f_opt = {}
+    if m.status == GRB.INFEASIBLE:
+        print("Model is infeasible; computing IIS")
+        m.computeIIS()
+        m.write("model.ilp")
+        print("IIS written to model.ilp")
+        print("The following constraints cannot be satisfied:")
+        for c in m.getConstrs():
+            if c.IISConstr:
+                print(f"{c.constrName} is part of the IIS.")
+    elif m.status == GRB.OPTIMAL:
+        print("Optimal solution found.")
+        for u_id in x:
+            x_opt[u_id] = {}
+            f_opt[u_id] = {}
+            for (i_id, j_id), var in x[u_id].items():
+                x_opt[u_id][i_id, j_id] = var.X  # Store the optimized value
+            for (i_id, j_id), var in f[u_id].items():
+                f_opt[u_id][i_id, j_id] = var.X
+        return x_opt, f_opt
+    else:
+        print("No optimal solution found.")
+        return None, None
+
+
 
 # 这里利用约束条件，使得其成为绝对值差异最小化（函数仍未完成，存在一些问题）
 def optimize_flow_as_abs(graph):
@@ -34,11 +134,12 @@ def optimize_flow_as_abs(graph):
     # 创建流量变量
     flow_vars = m.addVars([(e.source(), e.target()) for e in graph.edges()], name="flow", lb=0, vtype=GRB.CONTINUOUS)
 
-    # 创建差异变量
-    diff_vars = m.addVars(graph.vertices(), name="diff", lb=0, vtype=GRB.CONTINUOUS)
+    # 创建差异的正部分和负部分变量
+    diff_pos_vars = m.addVars(graph.vertices(), name="diff_pos", lb=0, vtype=GRB.CONTINUOUS)
+    diff_neg_vars = m.addVars(graph.vertices(), name="diff_neg", lb=0, vtype=GRB.CONTINUOUS)
 
-    # 目标函数
-    m.setObjective(sum(diff_vars[v] for v in graph.vertices()), GRB.MINIMIZE)
+    # 目标函数：最小化所有正部分和负部分差异变量的总和
+    m.setObjective(sum(diff_pos_vars[v] + diff_neg_vars[v] for v in graph.vertices()), GRB.MINIMIZE)
 
     # 流量守恒约束，除了源点和汇点
     source = graph.vertex(0)
@@ -46,31 +147,17 @@ def optimize_flow_as_abs(graph):
     for v in graph.vertices():
         if v == source or v == sink:
             continue
-        
-        inflow = LinExpr()
-        outflow = LinExpr()
-        for e in v.in_edges():
-            inflow += flow_vars[e.source(), e.target()]
-        for e in v.out_edges():
-            outflow += flow_vars[e.source(), e.target()]
+        inflow = sum(flow_vars[e.source(), e.target()] for e in v.in_edges())
+        outflow = sum(flow_vars[e.source(), e.target()] for e in v.out_edges())
         m.addConstr(inflow == outflow, f"conservation_{int(v)}")
 
-    # 对于每个顶点，设置差异约束
+    # 差异约束
     coverage_property = graph.vertex_properties["coverage"]
     for v in graph.vertices():
-        inflow = LinExpr()
-        for e in v.in_edges():
-            inflow += flow_vars[(e.source(), e.target())]
-        
-        # coverage = LinExpr()
+        inflow = sum(flow_vars[e.source(), e.target()] for e in v.in_edges())
         coverage = coverage_property[v]
-        total_flow_expr = LinExpr()
-        total_flow_expr += inflow
-        total_flow_expr -= coverage  # 将丰度作为常数从入流量中减去
-
-        # 为了避免纯常数表达式，我们可以通过添加一个微小的变量项来确保 total_flow_expr 保持为线性表达式
-        # 注意：以下代码假设至少有一个流量变量，如果完全没有流量变量，可能需要进一步调整
-        m.addGenConstrAbs(diff_vars[v], total_flow_expr, name=f"abs_diff_{int(v)}")
+        # 约束：inflow - coverage = diff_pos - diff_neg
+        m.addConstr(inflow - coverage == diff_pos_vars[v] - diff_neg_vars[v], f"diff_{int(v)}")
 
     # 求解模型
     m.optimize()
@@ -78,8 +165,23 @@ def optimize_flow_as_abs(graph):
     # 打印结果
     if m.status == GRB.OPTIMAL:
         print("Optimal solution found.")
+
+        # 创建一个边属性来存储流量值
+        flow_property = graph.new_edge_property("int")
+        coverage_property = graph.vertex_properties['coverage']
+        
+        # 遍历边，更新边的流量属性
         for e in graph.edges():
-            print(f"Flow on edge {int(e.source())}->{int(e.target())}: {flow_vars[e.source(), e.target()].X}")
+            source = int(e.source())
+            target = int(e.target())
+            flow_value = int(flow_vars[source, target].X)  # 取整数部分
+            if flow_value != 0:
+                flow_property[e] = flow_value
+            else:
+                flow_property[e] = coverage_property[source] # 如果流量为0的话就将源点的丰度赋予
+
+        # 将流量属性绑定到图中
+        graph.edge_properties["flow"] = flow_property
     else:
         print("Optimal solution not found.")
 
@@ -138,76 +240,16 @@ def optimize_flow_as_qp(graph):
         print("Optimal solution not found.")
 
 
-
-# 解析FASTA文件并构建图
-def build_graph_from_fasta(file_path):
-    graph = Graph(directed=True)
-
-    info = graph.new_vertex_property("string")
-    vertex_dict = {}  # 创建一个ID到顶点对象的映射
-
-    with open(file_path, 'r') as file:
-        for line in file:
-            parts = line.strip().split()
-            node_Id = int(parts[0])
-            node_info = parts[1]  # 直接使用字符串
-            children_values = map(int, parts[2:])
-
-            # 检查顶点是否已存在，如果不存在，则添加
-            if node_Id not in vertex_dict:
-                vertex_dict[node_Id] = graph.add_vertex()
-            info[vertex_dict[node_Id]] = node_info
-
-            for child in children_values:
-                if child not in vertex_dict:
-                    vertex_dict[child] = graph.add_vertex()
-                graph.add_edge(vertex_dict[node_Id], vertex_dict[child])
-
-    graph.vertex_properties["info"] = info  # 将属性添加到图的外部
-
-    return graph,vertex_dict
-
-
-def update_coverage(graph, file_path):
-    coverage_property = graph.new_vertex_property("int")  # 避免与局部变量冲突
-    id_to_vertex = {int(v): v for v in graph.vertices()}  # 创建ID到顶点的映射
-
-    with open(file_path, 'r') as file:
-        for line in file:
-            parts = line.strip().split(' : ')
-            node_Id = int(parts[0])
-            cov_value = int(parts[1])  # 使用不同的变量名来存储覆盖率值
-
-            if node_Id in id_to_vertex:  # 使用映射来查找顶点
-                coverage_property[id_to_vertex[node_Id]] = cov_value
-            else:
-                print(f"Warning: Node {node_Id} not found in the graph.")
-    
-    graph.vertex_properties["coverage"] = coverage_property  # 将属性添加到图中
-
-
-
-# 使用函数来打印顶点和其属性
-def print_vertex_properties(graph):
-    info_property = graph.vertex_properties["info"]
-    coverage_property = graph.vertex_properties["coverage"]
-
-    for v in graph.vertices():
-        v_id = int(v)  # 获取顶点ID（如果您维护了一个从顶点对象到ID的映射，这里可能需要调整）
-        v_info = info_property[v]
-        v_coverage = coverage_property[v]
-        print(f"顶点 {v_id}: info = {v_info}, coverage = {v_coverage}")
-
-
 # Find the "shortest" Path by dijkstra 使用dijkstra找权值的最小的路径
-def dijkstra(graph):
-    flow_property = graph.edge_properties["flow"]
+def dijkstra(graph,a):
+    flow_graph = copy.deepcopy(graph)
+    flow_property = flow_graph.edge_properties["flow"]
     # 最小堆
     heap = []
     path = {}
     # dist[i] 记录源点到i点的距离最小值
     # 初始化为无穷大
-    N = graph.num_vertices() # reprense the number of vertices
+    N = flow_graph.num_vertices() # reprense the number of vertices
     dist = [np.inf] * N
     visited = [False] * N
     prev = [-1] * N
@@ -223,7 +265,7 @@ def dijkstra(graph):
             continue
         visited[curId] = True
 
-        curVertex = graph.vertex(curId)
+        curVertex = flow_graph.vertex(curId)
         for e in curVertex.out_edges():
             v = int(e.target())
 
@@ -234,11 +276,11 @@ def dijkstra(graph):
                 prev[v] = curId # record ID of previous node
 
     # build the shortest Path
-    def build_path(prev, tragetId, graph):
+    def build_path(prev, tragetId, flow_graph):
         # Backtrace from the end to find the Path
         path = []
-        flow_property = graph.edge_properties["flow"]
-        coverage_property = graph.vertex_properties["coverage"]
+        flow_property = flow_graph.edge_properties["flow"]
+        coverage_property = flow_graph.vertex_properties["coverage"]
 
         while tragetId != -1:
             path.append(int(tragetId))
@@ -247,16 +289,16 @@ def dijkstra(graph):
             if prevId == -1:
                 break
 
-            prevNode = graph.vertex(prevId)
-            tragetNode = graph.vertex(tragetId)
-            curEdge = graph.edge(prevNode,tragetNode,all_edges=True)
+            prevNode = flow_graph.vertex(prevId)
+            tragetNode = flow_graph.vertex(tragetId)
+            curEdge = flow_graph.edge(prevNode,tragetNode,all_edges=True)
             
             # update current edge's flow
             if curEdge is not None:
                 # multiple edges
                 for edge in curEdge:
                     coverage = coverage_property[prevNode]
-                    new_flow = flow_property[edge] + coverage * math.log10(coverage)
+                    new_flow = flow_property[edge] + a * coverage
                     flow_property[edge] = new_flow
                         
             tragetId = prevId
@@ -267,102 +309,249 @@ def dijkstra(graph):
     if dist[sinkId] == np.inf:
         print(f'No path leads to the endpoint')
     else:
-        path = build_path(prev, sinkId, graph)
+        path = build_path(prev, sinkId, flow_graph)
         print(f'curPath value is {dist[sinkId]}')
+
+    return path,flow_graph
+
+
+def find_path(prev, targetID):
+    path = []
+
+    while targetID != -1:
+        path.append(int(targetID))
+        targetID = prev.get(targetID, -1)
+
+    path.reverse()
 
     return path
 
 
-# 调用函数导出流量信息到文件
-def export_flow_info(graph, filename="flow_info.txt"):
-    # 获取流量属性
-    flow_property = graph.edge_properties["flow"]
-
-    # 打开文件准备写入
-    with open(filename, "w") as file:
-        # 遍历所有边，获取流量信息并写入文件
-        for e in graph.edges():
-            source = int(e.source())
-            target = int(e.target())
-            flow = flow_property[e]
-            # 格式化字符串：点u -> 点v + 流量信息
-            line = f"{source} -> {target} with flow {flow}\n"
-            file.write(line)
-
-    print(f"Flow information has been exported to {filename}.")
-
-def export_path_info(path, num, filename="Path_info.txt"):
-    with open(filename, "a") as file:  # 使用 "a" 模式以追加的方式写入文件
-        # 使用f-string格式化路径编号，确保num变量被正确解析
-        line = f"path{num}: \n"
-        # 将节点ID转换为字符串，并用逗号连接
-        line += ", ".join(str(nodeId) for nodeId in path)
-        line += "\n"  # 添加换行符以分隔不同的路径
-        file.write(line)  # 写入整个路径信息
-
-    print(f"Path information has been exported to {filename}.")
+# 随机找10条路径
+def dfs(flow_graph, vertexID, prev, paths_found, max_paths=10):
+    # 到达目标节点并且找到的路径少于10条
+    if vertexID == flow_graph.num_vertices() - 1 and len(paths_found) < max_paths:
+        path = find_path(prev, vertexID)
+        paths_found.append(path)  # 存储找到的路径
+        graph_init.export_pathExtraction_polio_fasta(flow_graph, path, len(paths_found) - 1)
+        return
     
-def export_pathExtraction_polio_fasta(graph, path, num, filename="validation-set.fasta"):
+    # 如果已经找到10条路径，则返回
+    if len(paths_found) >= max_paths:
+        return
 
-    if "info" not in graph.vertex_properties:
-        print(f"The 'info' property does not exist on graph's vertices.")
-
-    info_property = graph.vertex_properties["info"]
-
-    with open(filename, "a") as file:
-        line = f">seq_{num+1}\n"
-        infos = [info_property[graph.vertex(nodeId)] for nodeId in path]
-        line += "".join(infos)
-        line += "\n"
-        file.write(line)
-    print(f"Path information with 'info' has been exported to {filename}.")
-
-def export_pathExtraction_polio_txt(graph, path, num, filename="validation-set.txt"):
-
-    if "info" not in graph.vertex_properties:
-        print(f"The 'info' property does not exist on graph's vertices.")
-
-    info_property = graph.vertex_properties["info"]
-
-    with open(filename, "a") as file:
-        line = f">seq_{num+1}\n"
-        infos = [info_property[graph.vertex(nodeId)] for nodeId in path]
-        line += "".join(infos)
-        line += "\n"
-        file.write(line)
-    print(f"Path information with 'info' has been exported to {filename}.")
+    v = flow_graph.vertex(vertexID)
+    # 获取所有子节点，并随机打乱顺序以随机化搜索过程
+    children = list(v.out_neighbours())
+    random.shuffle(children)
+    for e in children:
+        childID = int(e)
+        if childID not in prev:  # 避免循环
+            prev[childID] = vertexID
+            dfs(flow_graph, childID, prev, paths_found, max_paths)
+            del prev[childID]  # 回溯
 
 
+def validate_random_dfs(graph):      
+    # 随机找10条路径然后进行比较相似度
+    prev = {}
+    paths_found = []
+    flow_graph = copy.deepcopy(graph)
+    # 开始DFS
+    dfs(flow_graph, 0, prev, paths_found)
+
+    validate_data.main()
 
 
-file_path = '6-graph.fasta'
-coverage_file_path = '6-coverage.txt'
-graph,vertex_dict = build_graph_from_fasta(file_path)
-update_coverage(graph, coverage_file_path)
-# print_vertex_properties(graph)
-# optimize_flow(graph)
-optimize_flow_as_qp(graph)
+def linear_search(graph):
+    # 线性搜索 a * cov * b * log10(cov)
+    for a_values in range(1,11,1):
+        for b_values in range(1,11,1):
+            flow_graph = copy.deepcopy(graph)
+
+            with open('validate-data.txt','a') as f:
+                line = "parameter setting\n"
+                line += " ".join(f"a:{a_values}, b:{b_values}\n")
+                f.write(line)
+
+            # 重新开一组测试机需要对上一组路径信息清空
+            with open("Path_info.txt", "w") as file:
+                    file.truncate(0)
+
+            with open("validation-set.fasta", "w") as file:
+                    file.truncate(0)
+
+            for i in range(20):
+                path,flow_graph = dijkstra(flow_graph,a_values,b_values)
+                graph_init.export_flow_info(flow_graph) # 用于观察路径的流量变化（可选注释）
+                graph_init.export_path_info(path,i) # 观察路径寻找了什么节点（可选注释）
+                graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i) # 需要将路径信息导出才可以验证
+                graph_init.export_pathExtraction_polio_txt(flow_graph,path,i) # fasta不易打开所以使用txt（可选注释）
+        
+            validate_data.main()
 
 
-#clean file content
-# 打开文件并截断其内容
-with open("validation-set.txt", "w") as file:
-    file.truncate(0)
+def get_random_successor(vertex):
+    # 收集所有从给定顶点出发的边
+    out_edges = list(vertex.out_edges())
+    
+    if not out_edges:
+        return None  # 没有出边的情况
+    
+    # 随机选择一个出边
+    chosen_edge = random.choice(out_edges)
+    
+    # 返回选择的出边的目标顶点
+    return chosen_edge.target()
 
-with open("validation-set.fasta", "w") as file:
-    file.truncate(0)
 
-with open("Path_info.txt", "w") as file:
-    file.truncate(0)
+def path_extraction_X_sc(x, f, graph, id_to_vertex, vertex_to_id):
+    # 这里仅对6-graph特殊处理
+    if f[1][0,3]> f[2][0,3]:
+        last_Vertex = 1
+    else:
+        last_Vertex = 2
 
-for i in range(6):
-    path = dijkstra(graph)
-    export_flow_info(graph)
-    export_path_info(path,i)
-    export_pathExtraction_polio_fasta(graph,path,i)
-    export_pathExtraction_polio_txt(graph,path,i)
+    start_Vertex = 3
+     
+    u = start_Vertex
+    path = [0,last_Vertex,u]
+    while u != 452:
+        child = []
+        # 寻找下一个结点
+        for xi,xj in x[u]:
+            if xi == last_Vertex and x[u][xi,xj] == 1:
+                child.append(xj)
+            
+        max_flag= 0
+        next_j = -1
+        
+        # 寻找通路中的流量最大的下一个节点（有多个节点）
+        for j in child:
+            if f[u][xi, j] > max_flag:
+                max_flag = f[u][xi,j]
+                next_j = j
+        
+        # 因为这里的条件太强，导致不存在通路
+        if next_j == -1:
+            cur_vertex = id_to_vertex[u]
+            child_Vertex = get_random_successor(cur_vertex)
+            next_j = vertex_to_id[child_Vertex]
+
+        u = next_j
+        path.append(u)
+        print(f"{u}", end=' ')
+
+    return path
+
+
+
+
+if __name__ == "__main__":
+    file_path = '6-graph.fasta'
+    coverage_file_path = '6-coverage.txt'
+    graph,id_to_vertex,vertex_to_id = graph_init.build_graph_from_fasta_new(file_path)
+    graph_init.update_coverage_new(graph, id_to_vertex, coverage_file_path)
+    graph_init.read_edgeWeight_new(graph, id_to_vertex, "edgeWeight-graph.txt")
+    # validate_data.validate_graph(graph)
+
+    # 构造边权
+    # filepaths = ["6Polio-reads/6Polio1.fasta", "6Polio-reads/6Polio2.fasta"]
+    # fasta_data = graph_init.load_fasta_data(filepaths)  # 在程序开始时预加载数据
+    # graph_init.edge_weight_multiprocess(graph,fasta_data)
+
+    # 线性规划
+    # optimize_flow_as_abs(graph)
+
+    # optimize_flow_as_qp(graph)
   
+    x, f = optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance=10000, conservation_slack_tolerance=10000)
 
 
+    #clean file content
+    # 打开文件并截断其内容
+    with open("validation-set.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validation-set.fasta", "w") as file:
+        file.truncate(0)
+
+    with open("Path_info.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validate-data.txt", "w") as file:
+        file.truncate(0)
+
+    with open("flow_info.txt", "w") as file:
+        file.truncate(0)
+
+    # 注意这里不能轻易打开否者会将保存下来的weight权值清空
+    # with open("edgeWeight-graph.txt", "w") as file:
+    #     file.truncate(0)
+
+    # graph_init.export_edge_weigth(graph)
+
+    flow_graph = copy.deepcopy(graph)
+    path = path_extraction_X_sc(x,f,flow_graph,id_to_vertex,vertex_to_id)
+    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=0)
+    # for i in range(20):
+        # path = path_extraction_X_sc(x,f,flow_graph)
+        # graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i)
+
+    # test.len_of_info(graph)
+
+    # export_flow_info(graph)
+
+
+    # 网格化只搜索a的变量
+    # for a_values in range(1,11,1):
+    #     flow_graph = copy.deepcopy(graph)
+
+    #     with open('validate-data.txt','a') as f:
+    #         line = "parameter setting\n"
+    #         line += " ".join(f"a:{a_values}\n")
+    #         f.write(line)
+
+    #     # 重新开一组测试机需要对上一组路径信息清空
+    #     with open("Path_info.txt", "w") as file:
+    #             file.truncate(0)
+
+    #     with open("validation-set.fasta", "w") as file:
+    #             file.truncate(0)
+
+    #     for i in range(20):
+    #         path,flow_graph = dijkstra(flow_graph,a_values)
+    #         export_flow_info(flow_graph) # 用于观察路径的流量变化（可选注释）
+    #         export_path_info(path,i) # 观察路径寻找了什么节点（可选注释）
+    #         export_pathExtraction_polio_fasta(flow_graph,path,i) # 需要将路径信息导出才可以验证
+    #         export_pathExtraction_polio_txt(flow_graph,path,i) # fasta不易打开所以使用txt（可选注释）
+    
+    #     validate_data.main()
+        
+
+    # 随机取值看规律    
+    # a_values = 4
+    # flow_graph = copy.deepcopy(graph)
+
+    # # with open('validate-data.txt','a') as f:
+    # #     line = "parameter setting\n"
+    # #     line += "".join(f"a:{a_values}\n")
+    # #     f.write(line)
+
+    # 重新开一组测试机需要对上一组路径信息清空
+    # with open("Path_info.txt", "w") as file:
+    #         file.truncate(0)
+
+    # with open("validation-set.fasta", "w") as file:
+    #         file.truncate(0)
+
+    # for i in range(20):
+    #     path,flow_graph = dijkstra(flow_graph,a_values)
+    #     graph_init.export_flow_info(flow_graph) # 用于观察路径的流量变化（可选注释）
+    #     graph_init.export_path_info(path,i) # 观察路径寻找了什么节点（可选注释）
+    #     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i) # 需要将路径信息导出才可以验证
+    #     graph_init.export_pathExtraction_polio_txt(flow_graph,path,i) # fasta不易打开所以使用txt（可选注释）
+
+    # validate_data.main()
 
 

@@ -3,12 +3,50 @@ from Bio.Seq import Seq
 from Bio.Align import PairwiseAligner
 import pickle
 import sys
+from graph_tool.all import *
+
+
+
+def validate_graph(g):
+    # 遍历所有节点和节点索引
+    for i, v in enumerate(g.vertices()):
+        print(f"Vertex {int(v)} has index {i}")
+
+    # 遍历所有边及其权重
+    for e in g.edges():
+        print(f"Edge ({int(e.source())} -> {int(e.target())}) with weight {g.ep.weight[e]}")
+
+    # 检查特定节点
+    vertex_id = 45
+    if vertex_id < len(list(g.vertices())):
+        v = g.vertex(vertex_id)
+        print(f"Vertex {int(v)} exists")
+    else:
+        print(f"Vertex {vertex_id} does not exist")
+
+    # 检查两个节点间是否存在边
+    v1, v2 = 31, 29
+    if g.edge(g.vertex(v1), g.vertex(v2)) is not None:
+        e = g.edge(g.vertex(v1), g.vertex(v2))
+        print(f"Edge ({v1} -> {v2}) exists with weight {g.ep.weight[e]}")
+    else:
+        print(f"No edge from {v1} to {v2}")
+
+   
+
+    # 绘制图形
+    # graph_draw(g, vertex_text=g.vertex_index, edge_text=g.ep.weight, output_size=(500, 500), output="graph.png")
+
+
+
+
 
         
 def read_fasta_file(filepath):
     """读取FASTA格式的文件并返回序列记录列表"""
     sequences = list(SeqIO.parse(filepath, "fasta"))
     return sequences
+
 
 
 def align_sequences(test_seq, ref_seqs):
@@ -82,7 +120,7 @@ def main():
 
     with open('validate-data.txt','a') as f:
         for ID, best_ref, score in normalized_scores:
-            line = "ID: {ID}, Best Ref: {best_ref}, Normalized Score: {score}\n"
+            line = f"ID: {ID}, Best Ref: {best_ref}, Normalized Score: {score}\n"
             f.write(line)
             
 
