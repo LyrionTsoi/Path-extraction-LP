@@ -12,6 +12,7 @@ import validate_data
 from gurobipy import Model, GRB, quicksum, abs_, max_
 import graph_init
 import test
+import math
 
 from gurobipy import Model, GRB, quicksum
 
@@ -78,7 +79,7 @@ def optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance, conser
 
     # At least one path through each node u
     for u_id in x:
-        m.addConstr(quicksum(x[u_id][i, j] for i, j in x[u_id]) >= 1)
+        m.addConstr(quicksum(x[u_id][i, j] for i, j in x[u_id]) >= max(1,len(x[u_id]) - 1) )
 
     # Flow conservation at each node u with slack
     for u in graph.vertices():
@@ -333,7 +334,7 @@ def dfs(flow_graph, vertexID, prev, paths_found, max_paths=10):
     if vertexID == flow_graph.num_vertices() - 1 and len(paths_found) < max_paths:
         path = find_path(prev, vertexID)
         paths_found.append(path)  # 存储找到的路径
-        graph_init.export_pathExtraction_polio_fasta(flow_graph, path, len(paths_found) - 1)
+        graph_init.export_pathExtraction_polio_fasta(flow_graph, path, len(paths_found))
         return
     
     # 如果已经找到10条路径，则返回
@@ -405,7 +406,27 @@ def get_random_successor(vertex):
     return chosen_edge.target()
 
 
-def path_extraction_X_sc(x, f, graph, id_to_vertex, vertex_to_id):
+def get_successor_throughX(x, f,cur_vertexID):
+    print()
+    successor = -1
+    curi = -1
+
+    for i,j in x[cur_vertexID]:
+        max_flag = 0
+
+        if x[cur_vertexID][i,j] == 1 and f[cur_vertexID][i,j] > max_flag:
+            successor = j
+            curi = i
+            max_flag = f[cur_vertexID][i,j]
+
+    if successor == -1:
+        print(f"can't find successor, curVertexID:{cur_vertexID}")
+
+    return successor,curi
+
+
+
+def path_extraction_X_sc(x, f):
     # 这里仅对6-graph特殊处理
     if f[1][0,3]> f[2][0,3]:
         last_Vertex = 1
@@ -418,6 +439,8 @@ def path_extraction_X_sc(x, f, graph, id_to_vertex, vertex_to_id):
     path = [0,last_Vertex,u]
     while u != 452:
         child = []
+        curi = last_Vertex
+
         # 寻找下一个结点
         for xi,xj in x[u]:
             if xi == last_Vertex and x[u][xi,xj] == 1:
@@ -434,16 +457,67 @@ def path_extraction_X_sc(x, f, graph, id_to_vertex, vertex_to_id):
         
         # 因为这里的条件太强，导致不存在通路
         if next_j == -1:
-            cur_vertex = id_to_vertex[u]
-            child_Vertex = get_random_successor(cur_vertex)
-            next_j = vertex_to_id[child_Vertex]
+            # cur_vertex = id_to_vertex[u]
+            # child_Vertex = get_random_successor(cur_vertex) #随机找一条路走
+            # next_j = vertex_to_id[child_Vertex]
 
+            # 找u点的通路（一定能找到因为线性约束条件）
+            child_VertexID, curi = get_successor_throughX(x,f,u)
+            next_j = child_VertexID
+
+        f[u][curi,next_j] = max(0.0001, f[u][curi,next_j] - math.exp(f[u][curi,next_j]) * 0.1)
+        if f[u][xi,next_j] == 0.0001:
+            print(f"{u} {xi}, {next_j}")
+
+        last_Vertex = u
         u = next_j
         path.append(u)
-        print(f"{u}", end=' ')
+        # print(f"{u}", end=' ')
 
     return path
 
+def path_extraction_X(x,f):
+     # 这里仅对6-graph特殊处理
+    if f[1][0,3]> f[2][0,3]:
+        last_Vertex = 1
+    else:
+        last_Vertex = 2
+
+    start_Vertex = 3
+     
+    u = start_Vertex
+    path = [0,last_Vertex,u]
+    while u != 452:
+        child = []
+        # 寻找下一个结点
+        for xi,xj in x[u]:
+            if x[u][xi,xj] == 1:
+                child.append((xi,xj))
+            
+        max_flag= 0
+        next_j = -1
+        curi = 0
+        curj = 0
+
+
+        # 寻找通路中的流量最大的下一个节点（有多个节点）
+        for i,j in child:
+            if f[u][i, j] > max_flag:
+                max_flag = f[u][i,j]
+                next_j = j
+                curi = i
+                curj = j
+        
+        f[u][curi,curj] = max(0.0001, f[u][curi,next_j] - math.exp(f[u][curi,next_j]) * 0.2)
+        if f[u][xi,next_j] == 0.0001:
+            print(f"{u} {xi}, {next_j}")
+
+        last_Vertex = u
+        u = next_j
+        path.append(u)
+        # print(f"{u}", end=' ')
+
+    return path
 
 
 
@@ -465,8 +539,12 @@ if __name__ == "__main__":
 
     # optimize_flow_as_qp(graph)
   
-    x, f = optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance=10000, conservation_slack_tolerance=10000)
+    x, f = optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance=0.1, conservation_slack_tolerance=0.1)
 
+    # for u in x:
+    #     for i,j in x[u]:
+    #         print(f"x: {u}, {i}, {j}, {x[u][i,j]}")
+    #         print(f"f: {u}, {i}, {j}, {f[u][i,j]}")
 
     #clean file content
     # 打开文件并截断其内容
@@ -491,9 +569,12 @@ if __name__ == "__main__":
 
     # graph_init.export_edge_weigth(graph)
 
-    flow_graph = copy.deepcopy(graph)
-    path = path_extraction_X_sc(x,f,flow_graph,id_to_vertex,vertex_to_id)
-    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=0)
+    # 优化过的线性规划
+    for i in range(0,15):
+        flow_graph = copy.deepcopy(graph)
+        # path = path_extraction_X_sc(x,f)
+        path = path_extraction_X(x,f)
+        graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=i)
     # for i in range(20):
         # path = path_extraction_X_sc(x,f,flow_graph)
         # graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i)
