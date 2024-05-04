@@ -168,15 +168,15 @@ def optimize_flow_as_abs(graph):
         print("Optimal solution found.")
 
         # 创建一个边属性来存储流量值
-        flow_property = graph.new_edge_property("int")
+        flow_property = graph.new_edge_property("float")
         coverage_property = graph.vertex_properties['coverage']
         
         # 遍历边，更新边的流量属性
         for e in graph.edges():
             source = int(e.source())
             target = int(e.target())
-            flow_value = int(flow_vars[source, target].X)  # 取整数部分
-            if flow_value != 0:
+            flow_value = flow_vars[source, target].X  # 取整数部分
+            if flow_value >= 0.0000001:
                 flow_property[e] = flow_value
             else:
                 flow_property[e] = coverage_property[source] # 如果流量为0的话就将源点的丰度赋予
@@ -224,16 +224,18 @@ def optimize_flow_as_qp(graph):
         print("Optimal solution found.")
 
         # 创建一个边属性来存储流量值
-        flow_property = graph.new_edge_property("int")
+        flow_property = graph.new_edge_property("float")
 
         # 遍历边，更新边的流量属性
         for e in graph.edges():
             source = int(e.source())
             target = int(e.target())
-            flow_value = int(flow_vars[source, target].X)  # 取整数部分
-            if flow_value != 0:
+            flow_value = flow_vars[source, target].X  # 取整数部分
+            if flow_value >= 0.0000001:
                 flow_property[e] = flow_value
                 # print(f"Flow on edge {source}->{target}: {flow_property[e]}")
+            else :
+                flow_property[e] = 0.0000001
 
         # 将流量属性绑定到图中
         graph.edge_properties["flow"] = flow_property
@@ -314,6 +316,74 @@ def dijkstra(graph,a):
         print(f'curPath value is {dist[sinkId]}')
 
     return path,flow_graph
+
+
+# 修正版dijkstra寻找最大路
+def dijkstra_max_path(graph, a):
+    flow_graph = copy.deepcopy(graph)
+    flow_property = flow_graph.edge_properties["flow"]
+    heap = []
+    path = {}
+    N = flow_graph.num_vertices()
+    dist = [-np.inf] * N  # 初始化所有距离为负无穷大
+    visited = [False] * N
+    prev = [-1] * N
+    sourceId = 0
+    sinkId = N - 1
+
+    dist[sourceId] = 0
+    heap = [(-0, sourceId)]  # 使用负号来让 heapq 作为最大堆使用
+
+    while heap:
+        curDist, curId = heapq.heappop(heap)
+        curDist = -curDist  # 取负还原实际距离
+        if visited[curId]:
+            continue
+        visited[curId] = True
+
+        curVertex = flow_graph.vertex(curId)
+        for e in curVertex.out_edges():
+            v = int(e.target())
+            weight = flow_property[e]
+            if curDist + weight > dist[v]:  # 寻找更大的路径
+                dist[v] = curDist + weight
+                heapq.heappush(heap, (-(dist[v]), v))  # 使用负号
+                prev[v] = curId
+
+    def build_path(prev, targetId, flow_graph):
+        path = []
+        flow_property = flow_graph.edge_properties["flow"]
+        coverage_property = flow_graph.vertex_properties["coverage"]
+        
+        while targetId != -1:
+            path.append(int(targetId))
+            prevId = prev[targetId]
+            if prevId == -1:
+                break
+            
+            prevNode = flow_graph.vertex(prevId)
+            targetNode = flow_graph.vertex(targetId)
+            curEdge = flow_graph.edge(prevNode, targetNode, all_edges=True)
+            
+            if curEdge is not None:
+                for edge in curEdge:
+                    # coverage = coverage_property[prevNode] # 用丰度作为调参的依据
+                    new_flow = max(0.0000001,flow_property[edge] - a * math.exp(flow_property[edge]))
+                    flow_property[edge] = new_flow
+
+            targetId = prevId
+        path.reverse()
+
+        return path
+    
+    if dist[sinkId] == -np.inf:
+        print('No path leads to the endpoint')
+    else:
+        path = build_path(prev, sinkId, flow_graph)
+        print(f'curPath value is {dist[sinkId]}')
+
+    return path, flow_graph
+
 
 
 def find_path(prev, targetID):
@@ -520,32 +590,17 @@ def path_extraction_X(x,f):
     return path
 
 
-
-if __name__ == "__main__":
+def op_lp():
     file_path = '6-graph.fasta'
     coverage_file_path = '6-coverage.txt'
     graph,id_to_vertex,vertex_to_id = graph_init.build_graph_from_fasta_new(file_path)
     graph_init.update_coverage_new(graph, id_to_vertex, coverage_file_path)
     graph_init.read_edgeWeight_new(graph, id_to_vertex, "edgeWeight-graph.txt")
-    # validate_data.validate_graph(graph)
-
     # 构造边权
     # filepaths = ["6Polio-reads/6Polio1.fasta", "6Polio-reads/6Polio2.fasta"]
     # fasta_data = graph_init.load_fasta_data(filepaths)  # 在程序开始时预加载数据
     # graph_init.edge_weight_multiprocess(graph,fasta_data)
-
-    # 线性规划
-    # optimize_flow_as_abs(graph)
-
-    # optimize_flow_as_qp(graph)
-  
     x, f = optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance=0.1, conservation_slack_tolerance=0.1)
-
-    # for u in x:
-    #     for i,j in x[u]:
-    #         print(f"x: {u}, {i}, {j}, {x[u][i,j]}")
-    #         print(f"f: {u}, {i}, {j}, {f[u][i,j]}")
-
     #clean file content
     # 打开文件并截断其内容
     with open("validation-set.txt", "w") as file:
@@ -567,72 +622,57 @@ if __name__ == "__main__":
     # with open("edgeWeight-graph.txt", "w") as file:
     #     file.truncate(0)
 
-    # graph_init.export_edge_weigth(graph)
-
     # 优化过的线性规划
     for i in range(0,15):
         flow_graph = copy.deepcopy(graph)
-        # path = path_extraction_X_sc(x,f)
+        # 强条件
+        # path = path_extraction_X_sc(x,f)  
+        # 弱条件
         path = path_extraction_X(x,f)
         graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=i)
-    # for i in range(20):
-        # path = path_extraction_X_sc(x,f,flow_graph)
-        # graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i)
-
-    # test.len_of_info(graph)
-
-    # export_flow_info(graph)
-
-
-    # 网格化只搜索a的变量
-    # for a_values in range(1,11,1):
-    #     flow_graph = copy.deepcopy(graph)
-
-    #     with open('validate-data.txt','a') as f:
-    #         line = "parameter setting\n"
-    #         line += " ".join(f"a:{a_values}\n")
-    #         f.write(line)
-
-    #     # 重新开一组测试机需要对上一组路径信息清空
-    #     with open("Path_info.txt", "w") as file:
-    #             file.truncate(0)
-
-    #     with open("validation-set.fasta", "w") as file:
-    #             file.truncate(0)
-
-    #     for i in range(20):
-    #         path,flow_graph = dijkstra(flow_graph,a_values)
-    #         export_flow_info(flow_graph) # 用于观察路径的流量变化（可选注释）
-    #         export_path_info(path,i) # 观察路径寻找了什么节点（可选注释）
-    #         export_pathExtraction_polio_fasta(flow_graph,path,i) # 需要将路径信息导出才可以验证
-    #         export_pathExtraction_polio_txt(flow_graph,path,i) # fasta不易打开所以使用txt（可选注释）
     
-    #     validate_data.main()
-        
+    
 
-    # 随机取值看规律    
-    # a_values = 4
-    # flow_graph = copy.deepcopy(graph)
 
-    # # with open('validate-data.txt','a') as f:
-    # #     line = "parameter setting\n"
-    # #     line += "".join(f"a:{a_values}\n")
-    # #     f.write(line)
+def lp():
+    file_path = '6-graph.fasta'
+    coverage_file_path = '6-coverage.txt'
+    graph,id_to_vertex,vertex_to_id = graph_init.build_graph_from_fasta_new(file_path)
+    graph_init.update_coverage_new(graph, id_to_vertex, coverage_file_path)
 
-    # 重新开一组测试机需要对上一组路径信息清空
-    # with open("Path_info.txt", "w") as file:
-    #         file.truncate(0)
+    # 线性规划
+    # optimize_flow_as_abs(graph)
+    optimize_flow_as_qp(graph)
 
-    # with open("validation-set.fasta", "w") as file:
-    #         file.truncate(0)
 
-    # for i in range(20):
-    #     path,flow_graph = dijkstra(flow_graph,a_values)
-    #     graph_init.export_flow_info(flow_graph) # 用于观察路径的流量变化（可选注释）
-    #     graph_init.export_path_info(path,i) # 观察路径寻找了什么节点（可选注释）
-    #     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i) # 需要将路径信息导出才可以验证
-    #     graph_init.export_pathExtraction_polio_txt(flow_graph,path,i) # fasta不易打开所以使用txt（可选注释）
+    #clean file content
+    # 打开文件并截断其内容
+    with open("validation-set.txt", "w") as file:
+        file.truncate(0)
 
-    # validate_data.main()
+    with open("validation-set.fasta", "w") as file:
+        file.truncate(0)
+
+    with open("Path_info.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validate-data.txt", "w") as file:
+        file.truncate(0)
+
+    with open("flow_info.txt", "w") as file:
+        file.truncate(0)
+
+    graph_init.edge_flow_normalizetion(graph)
+    
+    graph_init.export_flow_info(graph)
+
+    for i in range(15):
+        path,graph = dijkstra_max_path(graph,0.27)
+        graph_init.export_pathExtraction_polio_fasta(graph,path,i) # 需要将路径信息导出才可以验证
+    
+
+
+if __name__ == "__main__":
+    lp()
 
 

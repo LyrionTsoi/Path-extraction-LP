@@ -4,6 +4,8 @@ from Bio.Align import PairwiseAligner
 import pickle
 import sys
 from graph_tool.all import *
+from Bio.Blast.Applications import NcbiblastnCommandline
+from Bio.Blast import NCBIXML
 
 
 

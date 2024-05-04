@@ -24,7 +24,6 @@ from gurobipy import Model, GRB, quicksum
 
 
 def edge_weight_normalization(graph):
-    # g是你的图对象，且g已经有了一个权重属性
     weight = graph.ep.weight
 
     # 获取所有权重的列表
@@ -38,6 +37,23 @@ def edge_weight_normalization(graph):
     for e in graph.edges():
         normalized_weight = (weight[e] - min_weight) / (max_weight - min_weight) if max_weight != min_weight else 0
         weight[e] = normalized_weight
+
+
+# 用于未优化前的线性规话流量的归一化处理
+def edge_flow_normalizetion(graph):
+    flow = graph.ep.flow
+
+    # 获取所有权重的列表
+    all_weights = [flow[e] for e in graph.edges()]
+
+    # 计算最大值和最小值
+    max_weight = max(all_weights)
+    min_weight = min(all_weights)
+
+    # 归一化权重，并设置回图的边属性
+    for e in graph.edges():
+        normalized_weight = (flow[e] - min_weight) / (max_weight - min_weight) if max_weight != min_weight else 0
+        flow[e] = normalized_weight
 
 
 
@@ -350,6 +366,7 @@ def export_edge_weigth(graph, id_to_vertex, filename="edgeWeight-graph.txt"):
             file.write(line)  # 写入整个路径信息
 
     print(f"Edge's Weight information has been exported to {filename}.")
+
 
 def export_edge_weigth(graph, vertex_to_id, filename="edgeWeight-graph.txt"):
     if "weight" not in graph.edge_properties:
