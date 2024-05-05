@@ -39,16 +39,11 @@ def validate_graph(g):
     # 绘制图形
     # graph_draw(g, vertex_text=g.vertex_index, edge_text=g.ep.weight, output_size=(500, 500), output="graph.png")
 
-
-
-
-
         
 def read_fasta_file(filepath):
     """读取FASTA格式的文件并返回序列记录列表"""
     sequences = list(SeqIO.parse(filepath, "fasta"))
     return sequences
-
 
 
 def align_sequences(test_seq, ref_seqs):
@@ -66,6 +61,7 @@ def align_sequences(test_seq, ref_seqs):
                 best_ref = ref.id
         best_scores.append((test.id, best_ref, best_score))
     return best_scores
+
 
 def align_sequence(test_seq, ref_seqs):
     """对每个测试序列，找到与其局部对齐得分最高的参考序列"""

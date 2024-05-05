@@ -590,6 +590,60 @@ def path_extraction_X(x,f):
     return path
 
 
+def path_extraction_flow_related(x,f):
+    # 这里仅对6-graph特殊处理
+    if f[1][0,3]> f[2][0,3]:
+        last_Vertex = 1
+    else:
+        last_Vertex = 2
+
+    start_Vertex = 3
+     
+    u = start_Vertex
+    path = [0,last_Vertex,u]
+    while u != 452:
+        child = []
+        # 寻找下一个结点
+        for xi,xj in x[u]:
+            if x[u][xi,xj] == 1:
+                child.append((xi,xj))
+            
+        max_flag= 0
+        next_j = -1
+        curi = 0
+        curj = 0
+        
+        # 添加左端信息进一步对下一个点做限制
+        left_related = graph_init.read_curNode_related(u)
+
+        # 寻找通路中的流量最大的下一个节点（有多个节点）
+        for i,j in child:
+            # 如何左端信息不为空的话就需要结合左端信息来处理
+            if len(left_related) != 0:
+                if f[u][i, j] > max_flag and j in left_related:
+                    max_flag = f[u][i,j]
+                    next_j = j
+                    curi = i
+                    curj = j
+            else:
+                if f[u][i, j] > max_flag:
+                    max_flag = f[u][i,j]
+                    next_j = j
+                    curi = i
+                    curj = j
+        
+        f[u][curi,curj] = max(0.0001, f[u][curi,next_j] - math.exp(f[u][curi,next_j]) * 0.2)
+        if f[u][xi,next_j] == 0.0001:
+            print(f"{u} {xi}, {next_j}")
+
+        last_Vertex = u
+        u = next_j
+        path.append(u)
+        # print(f"{u}", end=' ')
+
+    return path
+
+
 def op_lp():
     file_path = '6-graph.fasta'
     coverage_file_path = '6-coverage.txt'
@@ -628,7 +682,9 @@ def op_lp():
         # 强条件
         # path = path_extraction_X_sc(x,f)  
         # 弱条件
-        path = path_extraction_X(x,f)
+        # path = path_extraction_X(x,f)
+        # 结合左端信息进行路径提取
+        path= path_extraction_flow_related(x,f)
         graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=i)
     
     
@@ -673,6 +729,7 @@ def lp():
 
 
 if __name__ == "__main__":
-    lp()
+    # lp()
+    op_lp()
 
 

@@ -483,3 +483,28 @@ def read_edgeWeight_new(graph, id_to_vertex, filepath):
             weight_property[edge] = weight
 
     graph.edge_properties["weight"] = weight_property 
+
+
+# read stain related information
+def read_curNode_related(node_id, file_path='6-related-node.txt'):
+    node_key = f'>{node_id}'
+    connections = []
+    capture = False
+    
+    with open(file_path, 'r') as file:
+        for line in file:
+            line = line.strip()
+            if line.startswith(node_key):
+                capture = True  # 开始捕获对应节点的数据
+            elif line.startswith('@'):
+                break  # 遇到 '@' 结束捕获
+            elif line.startswith('>') and line != node_key:
+                capture = False  # 遇到其他节点标识，停止当前节点的捕获
+            
+            if capture and not line.startswith('>'):
+                # 忽略权重，只捕获节点数字
+                connections_line = line.split('(')[0].strip()
+                connections.extend(map(int, connections_line.split()))
+    
+    return connections
+                
