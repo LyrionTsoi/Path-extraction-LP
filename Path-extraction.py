@@ -318,6 +318,73 @@ def dijkstra(graph,a):
     return path,flow_graph
 
 
+# 优化线性规划得到的是(i,u,j)三元组的流量，所以要重新对边流量进行赋值
+def dijkstra_max_path_flow(flow_graph, a):
+    flow_property = flow_graph.edge_properties["flow"]
+    
+    heap = []
+    path = {}
+    N = flow_graph.num_vertices()
+    dist = [-np.inf] * N  # 初始化所有距离为负无穷大
+    visited = [False] * N
+    prev = [-1] * N
+    sourceId = 0
+    sinkId = N - 1
+
+    dist[sourceId] = 0
+    heap = [(-0, sourceId)]  # 使用负号来让 heapq 作为最大堆使用
+
+    while heap:
+        curDist, curId = heapq.heappop(heap)
+        curDist = -curDist  # 取负还原实际距离
+        if visited[curId]:
+            continue
+        visited[curId] = True
+
+        curVertex = flow_graph.vertex(curId)
+        for e in curVertex.out_edges():
+            v = int(e.target())
+            weight = flow_property[e]
+            if curDist + weight > dist[v]:  # 寻找更大的路径
+                dist[v] = curDist + weight
+                heapq.heappush(heap, (-(dist[v]), v))  # 使用负号
+                prev[v] = curId
+
+    def build_path(prev, targetId, flow_graph):
+        path = []
+        flow_property = flow_graph.edge_properties["flow"]
+        coverage_property = flow_graph.vertex_properties["coverage"]
+        
+        while targetId != -1:
+            path.append(int(targetId))
+            prevId = prev[targetId]
+            if prevId == -1:
+                break
+            
+            prevNode = flow_graph.vertex(prevId)
+            targetNode = flow_graph.vertex(targetId)
+            curEdge = flow_graph.edge(prevNode, targetNode, all_edges=True)
+            
+            if curEdge is not None:
+                for edge in curEdge:
+                    # coverage = coverage_property[prevNode] # 用丰度作为调参的依据
+                    new_flow = max(0.0000001,flow_property[edge] - a * math.exp(flow_property[edge]))
+                    flow_property[edge] = new_flow
+
+            targetId = prevId
+        path.reverse()
+
+        return path
+    
+    if dist[sinkId] == -np.inf:
+        print('No path leads to the endpoint')
+    else:
+        path = build_path(prev, sinkId, flow_graph)
+        print(f'curPath value is {dist[sinkId]}')
+
+    return path, flow_graph
+
+
 # 修正版dijkstra寻找最大路
 def dijkstra_max_path(graph, a):
     flow_graph = copy.deepcopy(graph)
@@ -614,7 +681,7 @@ def path_extraction_flow_related(x,f):
         curj = 0
         
         # 添加左端信息进一步对下一个点做限制
-        left_related = graph_init.read_curNode_related(u)
+        left_related = graph_init.read_curNode_relatedNode(u)
 
         # 寻找通路中的流量最大的下一个节点（有多个节点）
         for i,j in child:
@@ -642,6 +709,83 @@ def path_extraction_flow_related(x,f):
         # print(f"{u}", end=' ')
 
     return path
+
+
+def path_extraction_related(x,f,graph,id_to_vertex):
+    # 这里仅对6-graph特殊处理
+    if f[1][0,3]> f[2][0,3]:
+        last_Vertex = 1
+    else:
+        last_Vertex = 2
+
+    start_Vertex = 3
+    wait_path = [start_Vertex]
+    explore_path = [0,last_Vertex]
+    answer = []  # 存储最终路径的答案
+
+    while wait_path:
+        current_node = wait_path.pop(0)  # 从队列头取出当前节点
+        explore_path.append(current_node)
+
+        if graph_init.is_last_node(current_node):  # 检查是否为最后一个节点
+            answer.extend(explore_path)  # 将沿途路径加入答案
+            continue
+
+        if not graph_init.has_potential_path(wait_path):  # 检查潜在路径是否为空
+            max_flow_child = graph_init.get_max_flow_edge(current_node,f)  # 获取最大流量的边
+            # 如何右端序列为空
+            if graph_init.is_right_info_missing(max_flow_child):
+                wait_path.append(max_flow_child)
+                continue
+
+            right_infoes = graph_init.read_Node_relatedInformation(max_flow_child)
+            right_info = graph_init.find_max_right_info(right_infoes)
+            wait_path.append(right_info)  # 将孩子节点的左端信息加入wait_path
+        else:
+            if graph_init.is_right_info_missing(current_node):  # 检查左端信息是否缺失
+                continue
+            else:
+                # 检查当前节点的左端信息与wait_path的匹配情况
+                right_info = graph_init.read_Node_relatedInformation(current_node)
+                if not graph_init.is_subsequencee(wait_path,right_info):
+                    max_flow_child = graph_init.get_max_flow_edge(current_node)
+
+                    if graph_init.is_right_info_missing(max_flow_child):
+                        wait_path.append(max_flow_child)
+                        continue
+
+                    right_infoes = graph_init.read_Node_relatedInformation(max_flow_child)
+                    right_info = graph_init.find_max_right_info(right_infoes)
+                    wait_path.append(right_info)
+                else:
+                    selectNodes = graph_init.get_matching_sequences_selectNode(right_info, wait_path)
+                    if len(selectNodes) != 0:
+                        selectNode = graph_init.find_max_nodeCoverage(selectNodes,graph, id_to_vertex)  # 加入唯一后续节点
+                        wait_path.append(selectNode)
+
+    return answer
+
+
+def update_weight(graph, path, f, id_to_vertex):
+    coverage_property = graph.vertex_properties["coverage"]
+
+    # update coverage
+    for nodeID in path:
+        node = id_to_vertex[nodeID]
+        coverage_property[node] = max(0.0001, coverage_property[node]*0.5)
+
+    # update flow
+    i = path[0]
+    u = path[1]
+    j = path[2]
+
+    for it in range(3,len(path) - 1,1):
+        f[u][i,j] = max(0.0001, f[u][i,j] - math.exp(f[u][i,j]) * 0.2)
+        i = u
+        u = j
+        j = path[it]
+
+    return graph, f
 
 
 def op_lp():
@@ -724,12 +868,97 @@ def lp():
 
     for i in range(15):
         path,graph = dijkstra_max_path(graph,0.27)
-        graph_init.export_pathExtraction_polio_fasta(graph,path,i) # 需要将路径信息导出才可以验证
+        graph_init.export_pathExtraction_polio_fasta(graph,path,i) 
     
+
+def lp_related():
+    file_path = '6-graph.fasta'
+    coverage_file_path = '6-coverage.txt'
+    graph,id_to_vertex,vertex_to_id = graph_init.build_graph_from_fasta_new(file_path)
+    graph_init.update_coverage_new(graph, id_to_vertex, coverage_file_path)
+    graph_init.read_edgeWeight_new(graph, id_to_vertex, "edgeWeight-graph.txt")
+
+    # 构造边权
+    # filepaths = ["6Polio-reads/6Polio1.fasta", "6Polio-reads/6Polio2.fasta"]
+    # fasta_data = graph_init.load_fasta_data(filepaths)  # 在程序开始时预加载数据
+    # graph_init.edge_weight_multiprocess(graph,fasta_data)
+    x, f = optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance=0.1, conservation_slack_tolerance=0.1)
+    #clean file content
+    with open("validation-set.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validation-set.fasta", "w") as file:
+        file.truncate(0)
+
+    with open("Path_info.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validate-data.txt", "w") as file:
+        file.truncate(0)
+
+    with open("flow_info.txt", "w") as file:
+        file.truncate(0)
+
+
+    for i in range(0,15):
+        path = path_extraction_related(x,f,graph, id_to_vertex)
+        graph_init.export_pathExtraction_polio_fasta(graph,path,i)
+        graph,f = update_weight(graph,path,f,id_to_vertex)
+
+
+def oplp_dijkstra():
+    file_path = '6-graph.fasta'
+    coverage_file_path = '6-coverage.txt'
+    graph,id_to_vertex,vertex_to_id = graph_init.build_graph_from_fasta_new(file_path)
+    graph_init.update_coverage_new(graph, id_to_vertex, coverage_file_path)
+    graph_init.read_edgeWeight_new(graph, id_to_vertex, "edgeWeight-graph.txt")
+    # 构造边权
+    # filepaths = ["6Polio-reads/6Polio1.fasta", "6Polio-reads/6Polio2.fasta"]
+    # fasta_data = graph_init.load_fasta_data(filepaths)  # 在程序开始时预加载数据
+    # graph_init.edge_weight_multiprocess(graph,fasta_data)
+    x, f = optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance=0.1, conservation_slack_tolerance=0.1)
+    #clean file content
+    # 打开文件并截断其内容
+    with open("validation-set.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validation-set.fasta", "w") as file:
+        file.truncate(0)
+
+    with open("Path_info.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validate-data.txt", "w") as file:
+        file.truncate(0)
+
+    with open("flow_info.txt", "w") as file:
+        file.truncate(0)
+
+    flow_graph = copy.deepcopy(graph)
+    flow_graph = graph_init.build_flow(flow_graph,f,vertex_to_id)
+    # for i in range(15):
+    #     path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    #     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i)   
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=0) 
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=1) 
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=2) 
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=3) 
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=4) 
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,1)
+    graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=5) 
+
 
 
 if __name__ == "__main__":
     # lp()
-    op_lp()
+    # op_lp()
 
+    # lp_related()
+    oplp_dijkstra()
+   
 

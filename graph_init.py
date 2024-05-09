@@ -23,6 +23,56 @@ import validate_data
 from gurobipy import Model, GRB, quicksum
 
 
+def build_flow(flow_graph,f,vertex_to_id):
+    flow_property = flow_graph.new_edge_property("float")
+    for e in flow_graph.edges():
+        sourceID = vertex_to_id[e.source()]
+        targetID = vertex_to_id[e.target()]
+
+        val = 0
+        # 选择流量最大当做边权
+        for u in f:
+            if u == sourceID:
+                for i,j in f[u]:
+                    if j == targetID and f[u][i,j] > val:
+                        val = f[u][i,j]
+
+        for u in f:
+            if u == targetID:
+                for i,j in f[u]:
+                    if i == sourceID and f[u][i,j] > val:
+                        val = f[u][i,j]
+
+        if flow_property[e] < val:
+            flow_property[e] = val
+
+        flow_graph.edge_properties['flow'] = flow_property
+    return flow_graph
+
+
+def normalize_vertex_property(graph):
+    # 获取顶点属性
+    vertex_property = graph.vertex_properties["coverage"]
+    
+    # 找到最大值和最小值
+    max_value = max(vertex_property[v] for v in graph.vertices())
+    min_value = min(vertex_property[v] for v in graph.vertices())
+    
+    # 防止分母为零的情况
+    if max_value == min_value:
+        raise ValueError("All vertices have the same value; cannot normalize.")
+
+    # 归一化顶点属性
+    for v in graph.vertices():
+        normalized_value = (vertex_property[v] - min_value) / (max_value - min_value)
+        vertex_property[v] = normalized_value
+        print(f"{vertex_property[v]}")
+
+    # 更新图的属性字典
+    graph.vertex_properties["coverage"] = vertex_property
+    return graph
+    
+
 def edge_weight_normalization(graph):
     weight = graph.ep.weight
 
@@ -105,14 +155,14 @@ def build_graph_from_fasta(file_path):
 
 
 def update_coverage(graph, file_path):
-    coverage_property = graph.new_vertex_property("int")  # 避免与局部变量冲突
+    coverage_property = graph.new_vertex_property("float")  # 避免与局部变量冲突
     id_to_vertex = {int(v): v for v in graph.vertices()}  # 创建ID到顶点的映射
 
     with open(file_path, 'r') as file:
         for line in file:
             parts = line.strip().split(' : ')
             node_Id = int(parts[0])
-            cov_value = int(parts[1])  # 使用不同的变量名来存储覆盖率值
+            cov_value = parts[1] # 使用不同的变量名来存储覆盖率值
 
             if node_Id in id_to_vertex:  # 使用映射来查找顶点
                 coverage_property[id_to_vertex[node_Id]] = cov_value
@@ -485,8 +535,8 @@ def read_edgeWeight_new(graph, id_to_vertex, filepath):
     graph.edge_properties["weight"] = weight_property 
 
 
-# read stain related information
-def read_curNode_related(node_id, file_path='6-related-node.txt'):
+# read stain related information to find next Node ID
+def read_curNode_relatedNode(node_id, file_path='6-related-node.txt'):
     node_key = f'>{node_id}'
     connections = []
     capture = False
@@ -508,3 +558,141 @@ def read_curNode_related(node_id, file_path='6-related-node.txt'):
     
     return connections
                 
+
+# read cur Node right information
+def read_Node_relatedInformation(node_id, file_path='6-related-node.txt'):
+    node_key = f'>{node_id}'
+    connections = []  # 存储节点信息和权重
+    
+    with open(file_path, 'r') as file:
+        capture = False
+        for line in file:
+            line = line.strip()
+            if line.startswith(node_key):
+                capture = True  # 开始捕获对应节点的数据
+            elif line.startswith('@'):
+                break  # 遇到 '@' 结束捕获
+            elif line.startswith('>') and line != node_key:
+                capture = False  # 遇到其他节点标识，停止当前节点的捕获
+            
+            if capture and not line.startswith('>'):
+                # 分割路径和权重
+                path_info, weight = line.rsplit('(', 1)
+                path_info = path_info.strip()
+                weight = weight.rstrip(')').strip()  # 移除右括号并去除空格
+                # 将路径信息和权重以元组形式存储
+                connections.append((path_info, int(weight)))
+
+    return connections
+
+
+
+def is_subsequence(test_sequence, connections):
+    # 将测试序列转换为整数列表
+    test_sequence = list(map(int, test_sequence.split()))
+    
+    # 逐个检查所有可能的前缀长度
+    for length in range(1, len(test_sequence) + 1):
+        # 获取当前前缀
+        prefix = test_sequence[:length]
+        
+        # 检查此前缀是否为任一连接序列的前缀
+        for conn in connections:
+            # 将连接转换为整数列表
+            conn_list = list(map(int, conn.split()))
+            # 如果当前连接长度小于前缀长度，继续检查下一个连接
+            if len(conn_list) < length:
+                continue
+            # 检查前缀是否匹配
+            if all(prefix[i] == conn_list[i] for i in range(length)):
+                return True  # 匹配成功，返回True
+    return False  # 没有找到匹配的前缀
+
+
+def is_last_node(node_id):
+    if node_id != 452:
+        return False
+    else:
+        return True
+
+
+def has_potential_path(wait_path):
+    if len(wait_path) == 0:
+        return False
+    else:
+        return True
+    
+
+def get_max_flow_edge(current_node,f):
+    max_flag = -1
+    next_j = -1
+
+    for i, j in f[current_node]:
+        if f[current_node][i, j] > max_flag:
+            max_flag = f[current_node][i,j]
+            next_j = j
+    
+    return next_j
+
+
+def find_max_right_info(right_infoes):
+    max_flag = -1
+    ans = {}
+
+    for path in right_infoes:
+        if right_infoes.get(path) > max_flag:
+            ans = path
+            max_flag = right_infoes.get(path)
+
+    return ans
+
+
+def is_right_info_missing(curNodeID):
+    right_info = read_Node_relatedInformation(curNodeID)
+    if len(right_info) == 0:
+        return True
+    else:
+        return False
+    
+
+def get_matching_sequences_selectNode(right_infoes, wait_path):
+    wait_path_list = copy.deepcopy(wait_path)
+    wait_path_list = list(map(int, wait_path.split()))
+    nextNodes = []
+    flag = True
+
+    for right_info in right_infoes:
+        right_list = list(map(int, right_info.split()))
+
+        lw = len(wait_path_list)
+        lr = len(right_list)
+        if len(right_list) <= lw:
+            continue
+
+        for i in range(lr):
+            if i >= lw :
+                nextNodes.append(right_info[i])
+                break
+
+            if i < lw and wait_path_list[i] != right_info[i]:
+                break
+
+
+    return nextNodes
+
+
+def find_max_nodeCoverage(selectNodes,graph,id_to_vertex):
+    coverage_property = graph.vertex_properties["coverage"]
+    max_flag= -1
+    maxNodeID = -1
+
+    for nodeID in selectNodes:
+        node = id_to_vertex[nodeID]
+        if coverage_property[node] > max_flag:
+            max_flag = coverage_property[node]
+            maxNodeID = nodeID
+        
+    return maxNodeID
+
+
+    
