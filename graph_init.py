@@ -86,7 +86,11 @@ def edge_weight_normalization(graph):
     # 归一化权重，并设置回图的边属性
     for e in graph.edges():
         normalized_weight = (weight[e] - min_weight) / (max_weight - min_weight) if max_weight != min_weight else 0
+        if normalized_weight < 0.0005:
+            normalized_weight = 0.0000000001
         weight[e] = normalized_weight
+
+    return graph
 
 
 # 用于未优化前的线性规话流量的归一化处理
@@ -439,7 +443,7 @@ def export_edge_weigth(graph, vertex_to_id, filename="edgeWeight-graph.txt"):
 
 def read_edgeWeight(graph, filepath):
     if "weight" not in graph.edge_properties:
-        weight_property = graph.new_edge_property("double")
+        weight_property = graph.new_edge_property("float")
     else:
         weight_property = graph.edge_properties['weight']
 
@@ -693,6 +697,63 @@ def find_max_nodeCoverage(selectNodes,graph,id_to_vertex):
             maxNodeID = nodeID
         
     return maxNodeID
+
+
+def update_flow_usinginmaxflowextraction(graph,path,id_to_vertex,vals,count):
+    vals.sort()
+    # avgval = min_top_val[12]
+    totol = 0
+    cnt = 0
+    for val in vals:
+        if val != 0.0000000001 and cnt < count:
+            totol = totol + val
+            cnt = cnt + 1
+
+    avgval = totol / count
+    print(f"{avgval}")
+    # update (u,v)
+    u = 0
+    v = path[1]
+
+    flow_property = graph.edge_properties['weight']
+    # 这样是更新不到最后一条路径
+    for i in range(2,len(path) - 1):
+        e = graph.edge(id_to_vertex[u], id_to_vertex[v])
+        flow_property[e] = max(0.0000000001,flow_property[e] - avgval)
+        u = v
+        v = path[i]
+
+    e = graph.edge(id_to_vertex[path[len(path) - 2]] , id_to_vertex[path[len(path) - 1]])
+    flow_property[e] = max(0.00000000001, flow_property[e] - avgval)
+
+    graph.edge_properties["weight"] = flow_property
+
+    return graph
+
+
+def get_max_flow_edge(graph,node):
+    val = 0
+    child = -1
+    flow_property = graph.edge_properties['flow']
+    for e in node.out_edges():
+        if flow_property[e] > val:
+            val = flow_property[e]
+            child = e.target()
+
+    return val, child
+
+
+def get_max_weight_edge(graph,node):
+    val = 0
+    child = -1
+    weight_property = graph.edge_properties["weight"]
+    for e in node.out_edges():
+        if weight_property[e] > val:
+            val = weight_property[e]
+            child = e.target()
+
+    return val, child
+
 
 
     

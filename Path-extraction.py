@@ -939,19 +939,82 @@ def oplp_dijkstra():
     # for i in range(15):
     #     path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
     #     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i)   
-    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.5)
     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=0) 
-    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.5)
     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=1) 
-    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.5)
     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=2) 
-    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.5)
     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=3) 
-    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.2)
+    path,flow_graph = dijkstra_max_path_flow(flow_graph,0.5)
     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=4) 
     path,flow_graph = dijkstra_max_path_flow(flow_graph,1)
     graph_init.export_pathExtraction_polio_fasta(flow_graph,path,num=5) 
 
+
+def path_extraction_max_flow(flow_graph,id_to_vertex,vertex_to_id,count):
+    path = []
+    sourceID = 0
+    sinkID = 452
+    vals = []
+
+    curNodeID = sourceID
+    while curNodeID != sinkID:
+        path.append(curNodeID)
+        curNode = id_to_vertex[curNodeID]
+        # greedly select child which is max flow
+        # val, child = graph_init.get_max_flow_edge(flow_graph,curNode)
+        val, child = graph_init.get_max_weight_edge(flow_graph, curNode)
+        vals.append(val)
+        childID = vertex_to_id[child]
+        curNodeID = childID
+
+    path.append(curNodeID)
+    flow_graph = graph_init.update_flow_usinginmaxflowextraction(flow_graph,path,id_to_vertex,vals,count)
+    return path
+    
+
+
+
+def max_flow():
+    file_path = '6-graph.fasta'
+    coverage_file_path = '6-coverage.txt'
+    graph,id_to_vertex,vertex_to_id = graph_init.build_graph_from_fasta_new(file_path)
+    graph_init.update_coverage_new(graph, id_to_vertex, coverage_file_path)
+    graph_init.read_edgeWeight_new(graph, id_to_vertex, "edgeWeight-graph.txt")
+    graph = graph_init.edge_weight_normalization(graph)
+    # 构造边权
+    # filepaths = ["6Polio-reads/6Polio1.fasta", "6Polio-reads/6Polio2.fasta"]
+    # fasta_data = graph_init.load_fasta_data(filepaths)  # 在程序开始时预加载数据
+    # graph_init.edge_weight_multiprocess(graph,fasta_data)
+    # x, f = optimize_flow_as_min_paths(graph, vertex_to_id, flow_slack_tolerance=0.1, conservation_slack_tolerance=0.1)
+    #clean file content
+    # 打开文件并截断其内容
+    with open("validation-set.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validation-set.fasta", "w") as file:
+        file.truncate(0)
+
+    with open("Path_info.txt", "w") as file:
+        file.truncate(0)
+
+    with open("validate-data.txt", "w") as file:
+        file.truncate(0)
+
+    with open("flow_info.txt", "w") as file:
+        file.truncate(0)
+
+    flow_graph = copy.deepcopy(graph)
+    # flow_graph = graph_init.build_flow(flow_graph,f,vertex_to_id)
+
+    flow_graph = copy.deepcopy(graph)
+    for i in range(0,10):
+        path = path_extraction_max_flow(flow_graph,id_to_vertex,vertex_to_id,count=11)
+        graph_init.export_pathExtraction_polio_fasta(flow_graph,path,i)
+
+    
 
 
 if __name__ == "__main__":
@@ -960,5 +1023,6 @@ if __name__ == "__main__":
 
     # lp_related()
     oplp_dijkstra()
-   
+
+    # max_flow()
 
